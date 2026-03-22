@@ -111,7 +111,7 @@
             document.title = `【${mag}級】${loc}`;
             mainTitle.innerText = `📍 ${loc}`;
             
-            todayBox.className = mag >= 4.5 ? "alert-active" : "";
+            todayBox.className = mag >= 5 ? "alert-active" : "";
             todayBox.innerHTML = `
                 <div class="big-mag">${mag}</div>
                 <span style="color:var(--danger); font-weight:bold;">🚨 今日最新地震</span>
