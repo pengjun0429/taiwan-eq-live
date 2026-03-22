@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地震監控中...</title>
+    <style>
+        :root { --danger: #e74c3c; --warning: #f39c12; --safe: #2ecc71; --dark: #2c3e50; --bg: #f4f7f9; }
+        body { font-family: 'Segoe UI', "Microsoft JhengHei", sans-serif; background: var(--bg); margin: 0; padding: 20px; color: var(--dark); }
+        .container { max-width: 700px; margin: 0 auto; }
+        
+        /* 這裡是網頁大標題，會根據地震地點自動更名 */
+        #auto-main-title { font-size: 2.2em; font-weight: 900; color: #1a1a1a; margin-bottom: 5px; text-align: center; }
+
+        .status-bar { background: white; padding: 8px 18px; border-radius: 30px; display: flex; align-items: center; justify-content: center; font-size: 0.85em; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 25px; }
+        .dot { height: 10px; width: 10px; background: var(--safe); border-radius: 50%; display: inline-block; margin-right: 10px; animation: blink 1s infinite; }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+        /* 今日最新卡片 */
+        #today-box {
+            background: white; border-radius: 25px; padding: 30px; margin-bottom: 35px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.1); border-left: 15px solid var(--danger);
+        }
+        .alert-active { border: 5px solid red !important; animation: shake 0.5s infinite; }
+        @keyframes shake { 0% { transform: translate(1px, 1px); } 50% { transform: translate(-1px, -2px); } 100% { transform: translate(1px, 1px); } }
+
+        /* 地點名稱大字 */
+        .location-header { font-size: 1.8em; font-weight: 800; color: var(--dark); display: block; margin: 10px 0; border-bottom: 3px solid #eee; padding-bottom: 8px; }
+        .big-mag { font-size: 5.5em; font-weight: 900; color: var(--danger); float: right; margin-left: 15px; line-height: 0.8; }
+        .tag { font-weight: bold; color: #7f8c8d; background: #f0f0f0; padding: 6px 12px; border-radius: 8px; font-size: 0.85em; display: inline-block; margin: 5px 5px 0 0; }
+
+        /* 歷史清單 */
+        .day-label { font-weight: bold; color: #7f8c8d; background: #dee5ed; padding: 6px 15px; border-radius: 6px; margin: 25px 0 12px; display: inline-block; }
+        .card { background: white; border-radius: 18px; padding: 20px; margin-bottom: 12px; box-shadow: 0 4px 8px rgba(0,0,0,0.03); border: 2px solid transparent; }
+        .list-loc { font-size: 1.4em; font-weight: bold; display: block; margin-bottom: 5px; color: #333; }
+        .list-mag { font-size: 2.5em; font-weight: 900; float: right; color: #f39c12; }
+        
+        .empty { text-align: center; padding: 60px; color: #95a5a6; font-size: 1.2em; background: white; border-radius: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="status-bar">
+        <span class="dot"></span> <span id="sync-status">系統同步中...</span>
+    </div>
+
+    <h1 id="auto-main-title">地震監測站</h1>
+    
+    <div id="today-box">
+        <div class="empty">資料讀取中...</div>
+    </div>
+
+    <h2 style="color:#7f8c8d; border-top:2px solid #ddd; padding-top:20px; margin-top:40px;">🗓️ 近三日歷史列表</h2>
+    <div id="history-list"></div>
+</div>
+
+<script>
+    const API_KEY = 'CWA-6C434703-95D0-4AB8-B822-42F8C6E37156';
+    const FENGSHAN = { lat: 22.6129, lng: 120.3557 }; 
+
+    function getDist(lat1, lon1, lat2, lon2) {
+        const R = 6371; 
+        const dLat = (lat2-lat1)*Math.PI/180;
+        const dLon = (lon2-lon1)*Math.PI/180;
+        const a = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)*Math.sin(dLon/2);
+        return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+
+    async function fetchEarthquake() {
+        try {
+            const res = await fetch(`https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0015-001?Authorization=${API_KEY}&format=JSON`);
+            const data = await res.json();
+            const records = data.records.Earthquake;
+
+            const today = new Date().toISOString().split('T')[0];
+            const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+            const dayBefore = new Date(Date.now() - 172800000).toISOString().split('T')[0];
+
+            render(records, [today, yesterday, dayBefore]);
+            document.getElementById('sync-status').innerText = `更新於：${new Date().toLocaleTimeString()}`;
+        } catch (e) { 
+            console.error(e);
+            document.getElementById('auto-main-title').innerText = "連線失敗";
+        }
+    }
+
+    function render(records, days) {
+        const todayBox = document.getElementById('today-box');
+        const historyList = document.getElementById('history-list');
+        const mainTitle = document.getElementById('auto-main-title');
+        const todayStr = days[0];
+
+        // 輔助函式：防錯地點抓取，避免出現 undefined
+        const getLocName = (eq) => {
+            return eq.EarthquakeInfo.EpicenterLocation || 
+                   eq.EarthquakeInfo.Epicenter.Location || 
+                   "未知位置";
+        };
+
+        // 1. 篩選今天的地震
+        const todayData = records.filter(r => r.EarthquakeInfo.OriginTime.includes(todayStr));
+        
+        if (todayData.length > 0) {
+            const eq = todayData[0].EarthquakeInfo;
+            const mag = eq.EarthquakeMagnitude.MagnitudeValue;
+            const loc = getLocName(todayData[0]); // 修正點
+            const dist = getDist(FENGSHAN.lat, FENGSHAN.lng, eq.Epicenter.EpicenterLatitude, eq.Epicenter.EpicenterLongitude);
+
+            // 【自動命名】：修改分頁與網頁大標題
+            document.title = `【${mag}級】${loc}`;
+            mainTitle.innerText = `📍 ${loc}`;
+            
+            todayBox.className = mag >= 4.0 ? "alert-active" : "";
+            todayBox.innerHTML = `
+                <div class="big-mag">${mag}</div>
+                <span style="color:var(--danger); font-weight:bold;">🚨 今日最新地震</span>
+                <span class="location-header">${loc}</span>
+                <div class="tag">離鳳山約 ${dist} km</div>
+                <div class="tag">時間：${eq.OriginTime.split(' ')[1]}</div>
+                <div class="tag">深度：${eq.FocalDepth} km</div>
+            `;
+        } else {
+            // 今日沒地震時的命名
+            document.title = "今日平安";
+            mainTitle.innerText = "🌿 今日平安";
+            todayBox.className = "";
+            todayBox.innerHTML = '<div class="empty">☕ 今日目前無顯著地震報告。</div>';
+        }
+
+        // 2. 歷史列表
+        let html = '';
+        days.forEach(day => {
+            const dayData = records.filter(r => r.EarthquakeInfo.OriginTime.includes(day));
+            if (dayData.length > 0) {
+                html += `<div class="day-label">📅 ${day === todayStr ? '今天' : day}</div>`;
+                dayData.forEach((r, idx) => {
+                    if (day === todayStr && idx === 0) return; // 跳過大卡片已顯示的
+
+                    const info = r.EarthquakeInfo;
+                    const mag = info.EarthquakeMagnitude.MagnitudeValue;
+                    const loc = getLocName(r); // 修正點
+                    const dist = getDist(FENGSHAN.lat, FENGSHAN.lng, info.Epicenter.EpicenterLatitude, info.Epicenter.EpicenterLongitude);
+                    
+                    html += `
+                        <div class="card" style="${mag >= 4.0 ? 'border:3px solid red;' : ''}">
+                            <div class="list-mag" style="color:${mag >= 4 ? 'red' : '#f39c12'}">${mag}</div>
+                            <span class="list-loc">${loc}</span>
+                            <div class="tag">距離 ${dist} km</div>
+                            <div class="tag">${info.OriginTime.split(' ')[1]}</div>
+                            <div class="tag">規模 ${mag}</div>
+                        </div>
+                    `;
+                });
+            }
+        });
+        historyList.innerHTML = html;
+    }
+
+    fetchEarthquake();
+    setInterval(fetchEarthquake, 60000);
+</script>
+
+</body>
+</html>
